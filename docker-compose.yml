@@ -1,0 +1,98 @@
+# ============================================================
+# Bayesian Risk-MLOps  —  docker-compose.yml
+# Author: Fidel Mehra
+#
+# Services
+# --------
+#  api        — FastAPI prediction service
+#  mlflow     — MLflow tracking server
+#  prometheus — metrics scraping (optional)
+# ============================================================
+
+version: "3.9"
+
+services:
+
+  # ----------------------------------------------------------
+  # Prediction API
+  # ----------------------------------------------------------
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    container_name: bayesian_risk_api
+    ports:
+      - "8000:8000"
+    volumes:
+      # Mount local data directory so the model artefact is accessible
+      - ./data:/app/data
+      - ./reports:/app/reports
+    environment:
+      - PYTHONUNBUFFERED=1
+      - MLFLOW_TRACKING_URI=http://mlflow:5000
+    depends_on:
+      mlflow:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
+    networks:
+      - mlops_net
+
+  # ----------------------------------------------------------
+  # MLflow tracking server (SQLite backend, local artefact store)
+  # ----------------------------------------------------------
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:v2.12.2
+    container_name: bayesian_risk_mlflow
+    ports:
+      - "5000:5000"
+    volumes:
+      - mlflow_data:/mlflow
+    command: >
+      mlflow server
+      --backend-store-uri sqlite:////mlflow/mlflow.db
+      --default-artifact-root /mlflow/artifacts
+      --host 0.0.0.0
+      --port 5000
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - mlops_net
+
+  # ----------------------------------------------------------
+  # Prometheus (scrapes /metrics from the API)
+  # ----------------------------------------------------------
+  prometheus:
+    image: prom/prometheus:v2.51.2
+    container_name: bayesian_risk_prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./config/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+    depends_on:
+      - api
+    restart: unless-stopped
+    networks:
+      - mlops_net
+
+volumes:
+  mlflow_data:
+    driver: local
+
+networks:
+  mlops_net:
+    driver: bridge
