@@ -1,0 +1,145 @@
+# =============================================================================
+# Bayesian Risk MLOps - Configuration
+# Author: Fidel Mehra
+# =============================================================================
+
+project:
+  name: bayesian-risk-mlops
+  version: "1.0.0"
+  author: "Fidel Mehra"
+  description: "Bayesian deep learning for financial risk forecasting"
+
+# ── Data Ingestion ─────────────────────────────────────────────────────────
+data:
+  tickers:
+    equities: ["SPY", "QQQ", "IWM", "EEM", "GLD"]
+    volatility: ["^VIX", "^VXN"]
+    crypto: ["BTC-USD", "ETH-USD"]
+    bonds: ["TLT", "IEF"]
+  primary_ticker: "SPY"
+  start_date: "2015-01-01"
+  end_date: "2024-12-31"
+  interval: "1d"
+  raw_dir: "data/raw"
+  processed_dir: "data/processed"
+  cache_dir: "data/cache"
+
+# ── Feature Engineering ───────────────────────────────────────────────────
+features:
+  rolling_windows: [5, 10, 20, 60, 120]
+  vol_estimators:
+    - close_to_close
+    - parkinson
+    - garman_klass
+    - rogers_satchell
+    - yang_zhang
+  momentum_periods: [5, 10, 20, 60]
+  rsi_period: 14
+  bbands_period: 20
+  bbands_std: 2.0
+  cross_asset_correlation_window: 60
+  target_variable: "realised_vol_20d"
+  sequence_length: 60
+  train_ratio: 0.7
+  val_ratio: 0.15
+  # test_ratio = 1 - train_ratio - val_ratio = 0.15
+
+# ── HMM Regime Labelling ────────────────────────────────────────────────
+hmm:
+  n_states: 3
+  covariance_type: "full"
+  n_iter: 200
+  tol: 1.0e-4
+  random_state: 42
+  regime_names: ["bull_low_vol", "bear_high_vol", "crisis"]
+  features_for_hmm: ["log_return", "vol_20d", "vol_60d"]
+
+# ── MC Dropout LSTM ─────────────────────────────────────────────────────
+model:
+  lstm:
+    seq_len: 60
+    hidden_sizes: [128, 64]
+    dropout_rate: 0.3
+    mc_samples: 100           # stochastic forward passes at inference
+    epochs: 150
+    batch_size: 64
+    learning_rate: 0.001
+    weight_decay: 1.0e-4
+    patience: 20              # early stopping patience
+    grad_clip: 1.0
+    scheduler: cosine_annealing
+    T_max: 50
+    device: cuda              # falls back to cpu if unavailable
+    seed: 42
+    checkpoint_dir: "artefacts/lstm"
+
+  gp:
+    kernel: matern52          # matern52 | rbf | periodic
+    nu: 2.5                   # Matern nu parameter
+    length_scale_bounds: [0.01, 100.0]
+    output_scale_bounds: [0.001, 10.0]
+    noise_level: 0.01
+    n_inducing: 200           # sparse GP inducing points
+    n_restarts_optimizer: 10
+    normalize_y: true
+    checkpoint_dir: "artefacts/gp"
+
+  ensemble:
+    method: "nll_weighted"    # simple | nll_weighted | stacking
+    calibration: "isotonic"   # None | isotonic | platt
+
+# ── Risk Metrics ──────────────────────────────────────────────────────────
+risk:
+  confidence_levels: [0.90, 0.95, 0.99]
+  horizon_days: [1, 5, 10, 22]
+  n_mc_simulations: 50000
+  methods:
+    - historical
+    - parametric_normal
+    - parametric_t
+    - monte_carlo
+  stress_scenarios:
+    - name: gfc_2008
+      start: "2008-09-01"
+      end: "2009-03-31"
+    - name: covid_2020
+      start: "2020-02-20"
+      end: "2020-04-30"
+    - name: dotcom_2000
+      start: "2000-03-10"
+      end: "2002-10-09"
+
+# ── Backtesting ───────────────────────────────────────────────────────────────
+backtest:
+  window_type: rolling         # rolling | expanding
+  min_window: 252              # minimum observations for initial fit
+  step_size: 21                # re-fit every 21 trading days (monthly)
+  significance_level: 0.05
+
+# ── API Server ───────────────────────────────────────────────────────────────
+api:
+  host: "0.0.0.0"
+  port: 8080
+  workers: 4
+  timeout: 60
+  max_request_size: 10485760  # 10MB
+  cors_origins: ["*"]
+  model_registry_uri: "http://mlflow:5000"
+  model_name: "bayesian-risk-lstm"
+  model_stage: "Production"
+
+# ── MLflow ─────────────────────────────────────────────────────────────────────
+mlflow:
+  tracking_uri: "http://localhost:5000"
+  experiment_name: "bayesian-risk-forecasting"
+  run_name_prefix: "run"
+  artifact_location: "mlflow-artifacts"
+  log_every_n_epochs: 5
+
+# ── Logging ─────────────────────────────────────────────────────────────────────
+logging:
+  level: INFO
+  format: "%(asctime)s | %(levelname)s | %(name)s | %(message)s"
+  log_dir: "logs"
+  rotation: "midnight"
+  backup_count: 7
